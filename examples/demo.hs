@@ -1,0 +1,30 @@
+PACIENTE "P001"
+GLUCOSA = 195
+PRESION_SISTOLICA = 145
+PRESION_DIASTOLICA = 90
+IMC = 31.2
+ACTIVIDAD_FISICA = 30
+AGUA = 1800
+PROTEINA = 85
+
+REGLA "RIESGO_METABOLICO"
+SI IMC >= 30 Y GLUCOSA > 180 ENTONCES
+    NIVEL_RIESGO = "ALTO"
+    ALERTA "Se detectaron indicadores elevados; se recomienda valoración profesional"
+FIN
+
+SI GLUCOSA > 180 ENTONCES
+    ALERTA "Nivel de glucosa elevado"
+FIN
+
+SI PRESION_SISTOLICA > 140 ENTONCES
+    ALERTA "Presión arterial elevada"
+FIN
+
+SI IMC >= 30 ENTONCES
+    ALERTA "IMC elevado"
+FIN
+
+SI AGUA < 1500 ENTONCES
+    RECOMENDAR "Revisar consumo de líquidos"
+FIN

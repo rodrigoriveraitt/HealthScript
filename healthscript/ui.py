@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 from typing import Optional
 
 from .pipeline import PipelineResult, run_pipeline
-
+from .storage import list_patients
 
 COLORS = {
     'bg': '#F5F7FB',
@@ -60,7 +60,8 @@ class HealthScriptApp(tk.Tk):
     El formulario de paciente funciona como la capa de captura de datos.
     Esos datos se transforman a código HealthScript y después recorren el
     pipeline académico: lexer -> parser -> semántica -> intérprete.
-    No hay base de datos externa; los datos viven en la sesión actual.
+    No hay base de datos externa; los datos viven en la sesión actual,
+    pero con la extensión añadida se persiste el historial en disco.
     """
 
     def __init__(self):
@@ -73,9 +74,17 @@ class HealthScriptApp(tk.Tk):
         self.current_result: Optional[PipelineResult] = None
         self.nav_buttons = {}
         self.patient_vars = {}
+        # UI state for patients view
+        self.patient_filter = tk.StringVar(value='TODOS')
+        self.patient_tree = None
+        self.patient_detail = None
+        self.patients_frame = None
+
         self._build_styles()
         self._build_layout()
         self._load_sample()
+        # Build patients section after other sections are constructed
+        self._build_patients_section()
         self._set_section('Dashboard')
 
     # ------------------------------------------------------------------
@@ -116,7 +125,8 @@ class HealthScriptApp(tk.Tk):
         tk.Label(brand_text, text='INTÉRPRETE · v2.0', bg=COLORS['sidebar'], fg=COLORS['sidebar_muted'], font=('SF Pro Display', 8, 'bold')).pack(anchor='w')
 
         tk.Label(self.sidebar, text='PLATAFORMA', bg=COLORS['sidebar'], fg='#5F6C80', font=('SF Pro Display', 8, 'bold')).pack(anchor='w', padx=25, pady=(0, 10))
-        for label, icon in [('Dashboard', '▦'), ('Registro de paciente', '✚'), ('Editor HealthScript', '⌘'), ('Análisis', '◈')]:
+        # include Pacientes in navigation
+        for label, icon in [('Dashboard', '▦'), ('Registro de paciente', '✚'), ('Editor HealthScript', '⌘'), ('Análisis', '◈'), ('Pacientes', '◉')]:
             self._nav_button(label, icon)
 
         tk.Label(self.sidebar, text='PROYECTO', bg=COLORS['sidebar'], fg='#5F6C80', font=('SF Pro Display', 8, 'bold')).pack(anchor='w', padx=25, pady=(28, 10))
@@ -239,7 +249,7 @@ class HealthScriptApp(tk.Tk):
         form_card = tk.Frame(body, bg=COLORS['panel'], highlightbackground=COLORS['border'], highlightthickness=1)
         form_card.pack(side='left', fill='both', expand=True, padx=(0, 14))
         tk.Label(form_card, text='DATOS DEL PACIENTE', bg=COLORS['panel'], fg=COLORS['text'], font=('SF Pro Display', 13, 'bold')).pack(anchor='w', padx=20, pady=(18, 4))
-        tk.Label(form_card, text='Los datos permanecen en la sesión local y no se envían a servicios externos.', bg=COLORS['panel'], fg=COLORS['muted'], font=('SF Pro Display', 9)).pack(anchor='w', padx=20, pady=(0, 14))
+        tk.Label(form_card, text='Los datos permanecen en la sesión local y no se envían a servicios externos.', bg=COLORS['panel'], fg=COLORS['muted'], font=('SF Pro Display', 9)).pack(anchor='w', padx=20, pady=(0, 12))
 
         fields = [
             ('patient_id', 'ID del paciente', 'P001'),
@@ -282,7 +292,7 @@ class HealthScriptApp(tk.Tk):
         preview_card.pack(side='left', fill='both')
         preview_card.pack_propagate(False)
         tk.Label(preview_card, text='HEALTHSCRIPT GENERADO', bg=COLORS['panel'], fg=COLORS['text'], font=('SF Pro Display', 13, 'bold')).pack(anchor='w', padx=16, pady=(18, 4))
-        tk.Label(preview_card, text='Esta es la representación que procesará tu intérprete.', bg=COLORS['panel'], fg=COLORS['muted'], font=('SF Pro Display', 9)).pack(anchor='w', padx=16, pady=(0, 10))
+        tk.Label(preview_card, text='Esta es la representación que procesará tu intérprete.', bg=COLORS['panel'], fg=COLORS['muted'], font=('SF Pro Display', 9)).pack(anchor='w', padx=16, pady=(0, 8))
         self.generated_preview = tk.Text(preview_card, bg=COLORS['editor_bg'], fg=COLORS['editor_text'], relief='flat', wrap='none', font=('Menlo', 9), padx=12, pady=12)
         self.generated_preview.pack(fill='both', expand=True, padx=12, pady=(0, 12))
         self.generated_preview.configure(state='disabled')
@@ -527,11 +537,131 @@ GLUCOSA, GLUCOSA_AYUNO, PRESION_SISTOLICA, PRESION_DIASTOLICA,
 PESO, ALTURA, IMC, CALORIAS, AGUA, PROTEINA y ACTIVIDAD_FISICA.
 
 Importante
-Este prototipo trabaja localmente en la computadora y no usa una base de datos externa. Los datos introducidos por formulario solo permanecen en la sesión actual. El sistema es una herramienta de monitoreo y apoyo preventivo; no sustituye una valoración médica ni realiza diagnóstico.
+Este prototipo trabaja localmente en la computadora y no usa una base de datos externa. Los datos introducidos por formulario solo permanecen en la sesión actual; sin embargo esta versión añade almacenamiento local del historial para consultas futuras.
 '''
         text.insert('1.0', docs)
         text.configure(state='disabled')
         return frame
+
+    # ------------------------------------------------------------------
+    # Patients section (historial persistente)
+    # ------------------------------------------------------------------
+    def _build_patients_section(self):
+        frame = tk.Frame(self.content, bg=COLORS['bg'])
+        self.patients_frame = frame
+
+        header = self._base_header_in(frame, 'Pacientes', 'Historial persistente de pacientes y su severidad')
+        controls = tk.Frame(header, bg=COLORS['bg'])
+        controls.pack(side='right', anchor='n')
+
+        ttk.Label(controls, text='Severidad:', background=COLORS['bg']).pack(side='left', padx=(0, 6))
+        combobox = ttk.Combobox(controls, textvariable=self.patient_filter, values=['TODOS', 'MEDIO', 'MODERADO', 'GRAVE'], state='readonly', width=12)
+        combobox.pack(side='left')
+        ttk.Button(controls, text='Refrescar', style='Secondary.TButton', command=self._refresh_patient_history).pack(side='left', padx=(8, 0))
+
+        body = tk.Frame(frame, bg=COLORS['bg'])
+        body.pack(fill='both', expand=True, padx=34, pady=(0, 16))
+
+        left = tk.Frame(body, bg=COLORS['panel'], highlightbackground=COLORS['border'], highlightthickness=1)
+        left.pack(side='left', fill='both', expand=True, padx=(0, 10))
+
+        self.patient_tree = ttk.Treeview(left, columns=('timestamp', 'patient_id', 'severity', 'alerts', 'recommendations'), show='headings', height=16)
+        self.patient_tree.heading('timestamp', text='Fecha')
+        self.patient_tree.heading('patient_id', text='Paciente')
+        self.patient_tree.heading('severity', text='Severidad')
+        self.patient_tree.heading('alerts', text='Alertas')
+        self.patient_tree.heading('recommendations', text='Recomendaciones')
+        self.patient_tree.column('timestamp', width=170, anchor='w')
+        self.patient_tree.column('patient_id', width=120, anchor='center')
+        self.patient_tree.column('severity', width=100, anchor='center')
+        self.patient_tree.column('alerts', width=240, anchor='w')
+        self.patient_tree.column('recommendations', width=260, anchor='w')
+        self.patient_tree.pack(fill='both', expand=True, padx=10, pady=10)
+        self.patient_tree.bind('<<TreeviewSelect>>', self._show_selected_patient_detail)
+
+        right = tk.Frame(body, bg=COLORS['panel'], highlightbackground=COLORS['border'], highlightthickness=1, width=420)
+        right.pack(side='left', fill='both')
+        right.pack_propagate(False)
+        tk.Label(right, text='DETALLE DEL PACIENTE', bg=COLORS['panel'], fg=COLORS['text'], font=('SF Pro Display', 13, 'bold')).pack(anchor='w', padx=16, pady=(15, 10))
+        self.patient_detail = tk.Text(right, bg=COLORS['panel'], fg=COLORS['text'], relief='flat', wrap='word', font=('Menlo', 9), padx=16, pady=12)
+        self.patient_detail.pack(fill='both', expand=True)
+        self.patient_detail.configure(state='disabled')
+
+        self._refresh_patient_history()
+        return frame
+
+    def _refresh_patient_history(self):
+        rows = list_patients()
+        filter_value = self.patient_filter.get()
+        if filter_value != 'TODOS':
+            rows = [r for r in rows if (r.get('severity') or '').upper() == filter_value]
+
+        for item in self.patient_tree.get_children():
+            self.patient_tree.delete(item)
+
+        for row in sorted(rows, key=lambda r: r.get('timestamp', ''), reverse=True):
+            self.patient_tree.insert('', 'end', values=(
+                row.get('timestamp', ''),
+                row.get('patient_id', 'SIN_ID'),
+                row.get('severity', 'MEDIO'),
+                '; '.join(row.get('alerts', []))[:180],
+                '; '.join(row.get('recommendations', []))[:180],
+            ))
+
+        self.patient_detail.configure(state='normal')
+        self.patient_detail.delete('1.0', 'end')
+        self.patient_detail.insert('1.0', 'Selecciona un paciente del historial para ver detalles.')
+        self.patient_detail.configure(state='disabled')
+
+    def _show_selected_patient_detail(self, event=None):
+        selected = self.patient_tree.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = self.patient_tree.item(item, 'values')
+        timestamp, patient_id, severity, alerts_text, recommendations_text = values
+
+        patients = list_patients()
+        match = None
+        for rec in patients:
+            if rec.get('patient_id') == patient_id and rec.get('timestamp') == timestamp:
+                match = rec
+                break
+
+        if not match:
+            return
+
+        detail = []
+        detail.append(f'Paciente: {match.get("patient_id")}\n')
+        detail.append(f'Fecha: {match.get("timestamp")}\n')
+        detail.append(f'Severidad: {match.get("severity")}\n\n')
+        detail.append('Valores:\n')
+        for key, value in match.get('values', {}).items():
+            detail.append(f'  - {key}: {value}\n')
+        detail.append('\nAlertas:\n')
+        if match.get('alerts'):
+            for a in match.get('alerts'):
+                detail.append(f'  - {a}\n')
+        else:
+            detail.append('  - Ninguna\n')
+        detail.append('\nRecomendaciones:\n')
+        if match.get('recommendations'):
+            for r in match.get('recommendations'):
+                detail.append(f'  - {r}\n')
+        else:
+            detail.append('  - Ninguna\n')
+        detail.append('\nReglas disparadas:\n')
+        if match.get('triggered_rules'):
+            for rr in match.get('triggered_rules'):
+                detail.append(f'  - {rr}\n')
+        else:
+            detail.append('  - Ninguna\n')
+
+        self.patient_detail.configure(state='normal')
+        self.patient_detail.delete('1.0', 'end')
+        self.patient_detail.insert('1.0', ''.join(detail))
+        self.patient_detail.configure(state='disabled')
 
     # ------------------------------------------------------------------
     # Navigation / pipeline execution
@@ -543,11 +673,14 @@ Este prototipo trabaja localmente en la computadora y no usa una base de datos e
             'Editor HealthScript': self.editor_frame,
             'Análisis': self.analysis_frame,
             'Documentación': self.docs_frame,
+            'Pacientes': self.patients_frame,
         }
         for frame in mapping.values():
-            frame.pack_forget()
+            if frame:
+                frame.pack_forget()
         frame = mapping.get(name, self.dashboard_frame)
-        frame.pack(fill='both', expand=True, before=self.status_label)
+        if frame:
+            frame.pack(fill='both', expand=True, before=self.status_label)
         for label, widgets in self.nav_buttons.items():
             active = label == name
             bg = '#1B2A42' if active else COLORS['sidebar']
@@ -683,7 +816,11 @@ Este prototipo trabaja localmente en la computadora y no usa una base de datos e
             tag = 'neutral'
             if name in thresholds:
                 limit, label = thresholds[name]
-                if value >= limit:
+                try:
+                    numeric = float(value)
+                except Exception:
+                    numeric = None
+                if numeric is not None and numeric >= limit:
                     status = label
                     tag = 'high'
                 else:
